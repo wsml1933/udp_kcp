@@ -1,90 +1,135 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MEM_PAGE_SIZE		4096 //页的大小
+#define MEM_PAGE_SIZE		4096 //页的大小 
 
-typedef struct mempool_s {
-	int block_size; //块的大小
-	int free_count; //空闲块的数量
+//内存页节点
+typedef struct mp_node_s { 
+	char* free_ptr;
+	char* end;
+	
+	struct mp_node_s* next;
+} mp_node_t;
 
-	char* free_ptr; //下一个分配的空闲块的地址
-	char* mem;      //整个内存的地址
-} mempool_t;
+typedef struct mp_pool_s {
+	struct mp_node_s* first; //第一个
+	struct mp_node_s* current; //当前的，用来分配内存
+	int max; //page的大小
+} mp_pool_t;
 
 //初始化
-int mp_init(mempool_t* m, int size) {
+int mp_init(mp_pool_t* m, int size) {
+
 	if (!m) return -1;
-	if (size < 16) size = 16;
 
-	m->block_size = size;
+	void* addr = malloc(size); //4096	
+	mp_node_t* node = (mp_node_t*)addr;
 
-	m->mem = (char*)malloc(MEM_PAGE_SIZE);
-	if (!m->mem) return -1;
-	m->free_ptr = m->mem;
-	m->free_count = MEM_PAGE_SIZE / size;
+	node->free_ptr = (char*)addr + sizeof(mp_node_t);
+	node->end = (char*)addr + size;
+	node->next = NULL;
 
-	int i = 0;
-	char* ptr = m->free_ptr;
-	for (i = 0; i < m->free_count; i++) {
-		*(char**)ptr = ptr + size;
-		ptr += size;
-	}
-	*(char**)ptr = NULL;
+	m->first = node;
+	m->current = node;
+	m->max = size;
 
 	return 0;
 }
 
 //销毁
-void mp_dest(mempool_t* m) {
-	if (!m || !m->mem) return;
+void mp_dest(mp_pool_t* m) {
 
-	free(m->mem);
+	if (!m) return;
+
+	while (!m->first) {
+
+		void* addr = m->first;
+		mp_node_t* node = (mp_node_t*)addr;
+
+		m->first = node->next;
+
+		free(addr);
+	}
+
+	return;
 }
 
 //分配
-void* mp_alloc(mempool_t* m) {
+void* mp_alloc(mp_pool_t* m, int size) {
+	
+	void* addr = m->current;
+	mp_node_t* node = (mp_node_t*)addr;
 
-	if (!m || m->free_count == 0) return NULL;
+	do {
+		if (size <= (node->end - node->free_ptr)) { //node剩余空间够分配
+			char* ptr = node->free_ptr;
+			node->free_ptr += size;
 
-	void* ptr = m->free_ptr;
+			return ptr;
+		}
+		node = node->next; //不够分就遍历下一个
+	} while (node); //直到找到够分的或者node没有能分的
 
-	m->free_ptr = *(char**)ptr; //指向下一个
-	m->free_count--; //减少一个空闲的
+	//遍历完也没有空间够分配，创建新节点
+	addr = malloc(m->max); //4096
+	node = (mp_node_t*)addr;
 
-	return ptr; //返回分配的块
+	node->free_ptr = (char*)addr + sizeof(mp_node_t);
+	node->end = (char*)addr + m->max;
 
+	//头插法插入到链表中
+	node->next = m->current;
+	m->current = node;
+
+	char* ptr = node->free_ptr;
+	node->free_ptr += size;
+
+	return ptr;
 }
 
 //释放了之后将其加进来
-void mp_free(mempool_t* m, void *ptr) {
+void mp_free(mp_pool_t* m, void* ptr) {
 
-	*(char**)ptr = m->free_ptr;
-	m->free_ptr = (char*)ptr;
-	m->free_count++;
 
 }
 
 int main() {
-	mempool_t m;
 
-	mp_init(&m, 32);
+	mp_pool_t m;
 
-	void* p1 = mp_alloc(&m);
+	mp_init(&m, MEM_PAGE_SIZE);
+	 
+	void* p1 = mp_alloc(&m, 16);
 	printf("1: mp_alloc: %p\n", p1);
 
-	void* p2 = mp_alloc(&m);
+	void* p2 = mp_alloc(&m, 32);
 	printf("2: mp_alloc: %p\n", p2);
 
-	void* p3 = mp_alloc(&m);
+	void* p3 = mp_alloc(&m, 64);
 	printf("3: mp_alloc: %p\n", p3);
 
-	void* p4 = mp_alloc(&m);
+	void* p4 = mp_alloc(&m, 128);
 	printf("4: mp_alloc: %p\n", p4);
 
-	mp_free(&m, p2);
-
-	void* p5 = mp_alloc(&m);
+	void* p5 = mp_alloc(&m, 256);
 	printf("5: mp_alloc: %p\n", p5);
+
+	mp_dest(&m);
 
 	return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
